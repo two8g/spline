@@ -86,8 +86,8 @@ class MongoDataLineageReader(lineageDAO: MultiVersionLineageDAO) extends DataLin
     * @return Descriptors of all data lineages
     */
   override def getDatasetDescriptor(id: UUID)(implicit ec: ExecutionContext): Future[PersistedDatasetDescriptor] =
-    lineageDAO.getDatasetDescriptor(id).map(grater[PersistedDatasetDescriptor].asObject(_))
+    lineageDAO.getDatasetDescriptor(id).map(_.o).map(grater[PersistedDatasetDescriptor].asObject(_))
 
   override def getLineagesByPathAndInterval(path: String, start: Long, end: Long)(implicit ex: ExecutionContext): Future[CloseableIterable[DataLineage]] =
-    lineageDAO.getLineagesByPathAndInterval(path, start, end).map(o => o.map(l => grater[DataLineage].asObject(l.o)))
+    lineageDAO.getLineagesByPathAndInterval(path, start, end).map(o => o.map(grater[DataLineage].asObject(_)))
 }

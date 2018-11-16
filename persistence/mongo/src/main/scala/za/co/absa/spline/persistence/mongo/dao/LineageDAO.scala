@@ -44,9 +44,9 @@ trait LineageDAO {
   def findDatasetDescriptors(maybeText: Option[String], intervalPageRequest: IntervalPageRequest)
                             (implicit ec: ExecutionContext): Future[CloseableIterable[DescriptorDBObject]]
 
-  def getDatasetDescriptor(id: UUID)(implicit ec: ExecutionContext): Future[DBObject]
+  def getDatasetDescriptor(id: UUID)(implicit ec: ExecutionContext): Future[DescriptorDBObject]
 
-  def getLineagesByPathAndInterval(path: String, start: Long, end: Long)(implicit ex: ExecutionContext): Future[CloseableIterable[LineageDBObject]]
+  def getLineagesByPathAndInterval(path: String, start: Long, end: Long)(implicit ex: ExecutionContext): Future[CloseableIterable[DBObject]]
 }
 
 trait VersionedLineageDAO extends VersionedDAO {
@@ -72,9 +72,9 @@ trait VersionedLineageDAO extends VersionedDAO {
   def findDatasetDescriptors(maybeText: Option[String], intervalRequest: IntervalPageRequest)
                             (implicit ec: ExecutionContext): Future[CloseableIterable[DescriptorDBObject]]
 
-  def getDatasetDescriptor(id: UUID)(implicit ec: ExecutionContext): Future[Option[DBObject]]
+  def getDatasetDescriptor(id: UUID)(implicit ec: ExecutionContext): Future[Option[DescriptorDBObject]]
 
   def countDatasetDescriptors(maybeText: Option[String], asAtTime: Timestamp)(implicit ec: ExecutionContext): Future[Int]
 
-  def getLineagesByPathAndInterval(path: String, start: Long, end: Long)(implicit ex: ExecutionContext): Future[CloseableIterable[LineageDBObject]]
+  def getLineagesByPathAndInterval(path: String, start: Long, end: Long)(implicit ex: ExecutionContext): Future[CloseableIterable[DBObject]]
 }

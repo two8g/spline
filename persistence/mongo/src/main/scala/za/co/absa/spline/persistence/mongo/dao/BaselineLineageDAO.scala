@@ -254,7 +254,7 @@ abstract class BaselineLineageDAO extends VersionedLineageDAO with Logging {
       DBObject("$match" → DBObject(idField → DBObject("$in" → DBList(lineageIds: _*)))),
       DBObject("$sort" → DBObject("timestamp" → -1, "datasetId" → 1))
     )
-    new DBCursorToCloseableIterableAdapter(cursor).map(new DescriptorDBObject(_))
+    new DBCursorToCloseableIterableAdapter(cursor).map(DescriptorDBObject(_))
   }
 
   override def countDatasetDescriptors(maybeText: Option[String], asAtTime: Timestamp)(implicit ec: ExecutionContext): Future[Int] =
@@ -282,10 +282,10 @@ abstract class BaselineLineageDAO extends VersionedLineageDAO with Logging {
     * @param id An unique identifier of a dataset
     * @return Descriptors of all data lineages
     */
-  override def getDatasetDescriptor(id: UUID)(implicit ec: ExecutionContext): Future[Option[DBObject]] = Future {
+  override def getDatasetDescriptor(id: UUID)(implicit ec: ExecutionContext): Future[Option[DescriptorDBObject]] = Future {
     using(selectPersistedDatasets(DBObject("$match" → DBObject("rootDataset._id" → id)))) {
       cursor =>
-        if (cursor.hasNext) Some(cursor.next)
+        if (cursor.hasNext) Some(DescriptorDBObject(cursor.next))
         else None
     }
   }
@@ -313,7 +313,7 @@ abstract class BaselineLineageDAO extends VersionedLineageDAO with Logging {
   protected def getMongoCollectionNameForComponent(component: Component): String =
     s"${component.name}_v$version"
 
-  override def getLineagesByPathAndInterval(path: String, start: Long, end: Long)(implicit ex: ExecutionContext): Future[CloseableIterable[LineageDBObject]] = {
+  override def getLineagesByPathAndInterval(path: String, start: Long, end: Long)(implicit ex: ExecutionContext): Future[CloseableIterable[DBObject]] = {
     val searchCriteria: Seq[DBObject] = Seq(
       DBObject("writePath" → path),
       DBObject("readPaths" → path)
@@ -336,8 +336,7 @@ abstract class BaselineLineageDAO extends VersionedLineageDAO with Logging {
 
     Future
       .traverse(cursor.asScala)(addComponents(_, overviewOnly = false))
-      .map(_.map(new LineageDBObject(_)))
-      .map(i => new CloseableIterable[LineageDBObject](iterator = i, closeFunction = cursor.close()))
+      .map(i => new CloseableIterable[DBObject](iterator = i, closeFunction = cursor.close()))
   }
 }
 
@@ -373,7 +372,6 @@ object BaselineLineageDAO {
 
 }
 
-class ProgressDBObject(val o: DBObject) extends AnyVal
-class LineageDBObject(val o: DBObject) extends AnyVal
-class DescriptorDBObject(val o: DBObject) extends AnyVal
+case class ProgressDBObject(o: DBObject)
+case class DescriptorDBObject(o: DBObject)
 

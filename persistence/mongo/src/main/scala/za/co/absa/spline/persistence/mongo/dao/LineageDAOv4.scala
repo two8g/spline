@@ -118,8 +118,8 @@ class LineageDAOv4(override val connection: MongoConnection) extends BaselineLin
   private def getOperationId(op: DBObject) =
     op.get(Field.mainProps).asInstanceOf[DBObject].get(Field.id).asInstanceOf[UUID]
 
-  override def getLineagesByPathAndInterval(path: String, start: Long, end: Long)(implicit ex: ExecutionContext): Future[CloseableIterable[LineageDBObject]] =
-    Future.successful(new CloseableIterable[LineageDBObject](Iterable.empty.iterator, () => Unit))
+  override def getLineagesByPathAndInterval(path: String, start: Long, end: Long)(implicit ex: ExecutionContext): Future[CloseableIterable[DBObject]] =
+    Future.successful(new CloseableIterable[DBObject](Iterable.empty.iterator, () => Unit))
 }
 
 object LineageDAOv4 {
@@ -189,14 +189,11 @@ trait MutableLineageUpgraderV4 {
         Future.traverse(iterable.iterator)(apply).
           map(new CloseableIterable(_, iterable.close()).asInstanceOf[T])
 
+      case descriptor: DescriptorDBObject => Future.successful(data)
       case lineage: DBObject
         if (lineage get Field.id).toString startsWith "ln_" =>
-        if (lineage containsField Field.datasetId)
-          Future.successful(data) // it's a DatasetDescription, no upgrade required
-        else {
           upgradeLineage(lineage)
           Future.successful(lineage.asInstanceOf[T])
-        }
     }
   })
 }

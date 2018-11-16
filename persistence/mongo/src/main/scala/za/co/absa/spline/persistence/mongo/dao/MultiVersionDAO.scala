@@ -157,13 +157,13 @@ class MultiVersionLineageDAO(protected val daoChain: VersionedLineageDAO*) exten
     callAndCombine(_.findDatasetDescriptors(maybeText, intervalPageRequest))(CloseableIterable.chain)
   }
 
-  override def getDatasetDescriptor(id: UUID)(implicit ec: ExecutionContext): Future[DBObject] =
+  override def getDatasetDescriptor(id: UUID)(implicit ec: ExecutionContext): Future[DescriptorDBObject] =
     callAndCombine(_.getDatasetDescriptor(id))(_.flatten.headOption).map(_.get)
 
   override def saveProgress(progress: ProgressDBObject)(implicit e: ExecutionContext): Future[Unit] = {
     latestDAO.saveProgress(progress)
   }
 
-  override def getLineagesByPathAndInterval(path: String, start: Long, end: Long)(implicit ex: ExecutionContext): Future[CloseableIterable[LineageDBObject]] =
+  override def getLineagesByPathAndInterval(path: String, start: Long, end: Long)(implicit ex: ExecutionContext): Future[CloseableIterable[DBObject]] =
     callAndCombine(_.getLineagesByPathAndInterval(path, start, end))(CloseableIterable.chain)
 }
