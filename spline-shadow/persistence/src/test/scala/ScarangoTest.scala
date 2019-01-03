@@ -33,7 +33,9 @@
 import java.util.UUID
 import java.util.UUID.randomUUID
 
-import io.circe.ObjectEncoder
+import io.circe.{Decoder, Encoder, ObjectEncoder}
+
+import scala.reflect.ClassTag
 
 //import ArangoModel._
 import com.outr.arango._
@@ -52,7 +54,7 @@ import scala.concurrent.duration.Duration
 
 //object ArangoModel {
   case class Progress(timestamp: Long, readCount: Long, _key: Option[String] = None, _id: Option[String] = None,  _rev: Option[String] = None) extends DocumentOption
-  case class Execution(appId: String, appName: String, sparkVer: String, timestamp: Long, _key: Option[String] = None, _id: Option[String] = None, _rev: Option[String] = None) extends DocumentOption
+  case class Execution(appId: String, appName: String, sparkVer: String, timestamp: Long, dataTypes: Seq[DataType], _key: Option[String] = None, _id: Option[String] = None, _rev: Option[String] = None) extends DocumentOption
 
   case class Schema(attributes: Seq[Attribute])//, dataTypes: Seq[DataType])
   case class Operation(name: String, expression: String, outputSchema: Schema, _key: Option[String] = None,  _id: Option[String] = None, _rev: Option[String] = None) extends DocumentOption
@@ -72,26 +74,8 @@ import scala.concurrent.duration.Duration
 
 object Database extends Graph("lineages") {
   val progress: VertexCollection[Progress] = vertex[Progress]("progress")
-  val execution: VertexCollection[Execution] = vertex[Execution]("execution")
-  val operation: VertexCollection[Operation] = {
-
-    import io.circe.{Decoder, Encoder}
-    import io.circe.generic.semiauto._
-    import com.outr.arango.rest
-
-    new VertexCollection[Operation](this, "operation") {
-      implicit val attrDec: Decoder[Attribute] = io.circe.generic.semiauto.deriveDecoder[Attribute]
-      implicit val schemaDec: Decoder[Schema] = io.circe.generic.semiauto.deriveDecoder[Schema]
-      implicit val attrEnc: Encoder[Attribute] = io.circe.generic.semiauto.deriveEncoder[Attribute]
-      implicit val schemaEnc: Encoder[Schema] = io.circe.generic.semiauto.deriveEncoder[Schema]
-      override implicit val encoder: Encoder[Operation] = deriveEncoder[Operation]
-      override implicit val decoder: Decoder[Operation] = deriveDecoder[Operation]
-      override protected def updateDocument(document: Operation, info: rest.CreateInfo): Operation = {
-        document.copy(_key = Option(info._key), _id = Option(info._id), _rev = Option(info._rev))
-      }
-    }
-  }
-
+  val execution: VertexCollection[Execution] = createVertextCollection[Execution]
+  val operation: VertexCollection[Operation] = createOperationVertexCollection()
   val dataSource: VertexCollection[DataSource] = vertex[DataSource]("dataSource")
 
   val progressOf: EdgeCollection[ProgressOf] = edge[ProgressOf]("progressOf", ("progress", "execution"))
@@ -99,6 +83,46 @@ object Database extends Graph("lineages") {
   val readsFrom: EdgeCollection[ReadsFrom] = edge[ReadsFrom]("readsFrom", ("operation", "dataSource"))
   val writesTo: EdgeCollection[WritesTo] = edge[WritesTo]("writesTo", ("operation", "dataSource"))
   val implements: EdgeCollection[Implements] = edge[Implements]("implements", ("execution", "operation"))
+
+  import io.circe.{Decoder, Encoder}
+  import io.circe.generic.semiauto._
+  import com.outr.arango.rest
+  implicit val dataTypeDec: Decoder[DataType] = deriveDecoder[DataType]
+  implicit val dataTypeEnc: Encoder[DataType] = deriveEncoder[DataType]
+
+  private def createVertextCollection[T <: DocumentOption with CopyMethod[T]](implicit typeTag: ClassTag[T]) = {
+    val name = typeTag.runtimeClass.getSimpleName
+    import Database._
+    new VertexCollection[T](this, name) {
+      override implicit val encoder: Encoder[T] = deriveEncoder[T]
+      override implicit val decoder: Decoder[T] = deriveDecoder[T]
+      override protected def updateDocument(document: T, info: rest.CreateInfo): T = {
+        document.copy(_key = Option(info._key), _id = Option(info._id), _rev = Option(info._rev))
+      }
+    }
+  }
+
+  trait CopyMethod[T <: DocumentOption] extends DocumentOption {
+    def copy(_key: Option[String], _id: Option[String], _rev: Option[String]): T
+  }
+
+
+  private def createOperationVertexCollection() = {
+    import io.circe.{Decoder, Encoder}
+    import io.circe.generic.semiauto._
+    import com.outr.arango.rest
+    new VertexCollection[Operation](this, "operation") {
+      implicit val attrDec: Decoder[Attribute] = deriveDecoder[Attribute]
+      implicit val schemaDec: Decoder[Schema] = deriveDecoder[Schema]
+      implicit val attrEnc: Encoder[Attribute] = deriveEncoder[Attribute]
+      implicit val schemaEnc: Encoder[Schema] = deriveEncoder[Schema]
+      override implicit val encoder: Encoder[Operation] = deriveEncoder[Operation]
+      override implicit val decoder: Decoder[Operation] = deriveDecoder[Operation]
+      override protected def updateDocument(document: Operation, info: rest.CreateInfo): Operation = {
+        document.copy(_key = Option(info._key), _id = Option(info._id), _rev = Option(info._rev))
+      }
+    }
+  }
 }
 
 class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
