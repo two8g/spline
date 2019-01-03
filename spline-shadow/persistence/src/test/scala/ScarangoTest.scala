@@ -33,48 +33,75 @@
 import java.util.UUID
 import java.util.UUID.randomUUID
 
-import ArangoModel._
+import io.circe.ObjectEncoder
+
+//import ArangoModel._
 import com.outr.arango._
 import com.outr.arango.managed._
 import org.apache.commons.lang.builder.ToStringBuilder.reflectionToString
 import org.scalatest.mockito.MockitoSugar
 import org.scalatest.tools.Durations
 import org.scalatest.{FunSpec, Matchers}
+import za.co.absa.spline.model.{DataLineage, MetaDataset}
 import za.co.absa.spline.{model => splinemodel}
-import za.co.absa.spline.model._
-import za.co.absa.spline.model.dt.Simple
-import za.co.absa.spline.model.op.{Operation => _, _}
+import za.co.absa.spline.model.dt.{DataType, Simple}
+import za.co.absa.spline.model.op.{BatchWrite, Generic, OperationProps}
 
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration.Duration
 
-object ArangoModel {
+//object ArangoModel {
   case class Progress(timestamp: Long, readCount: Long, _key: Option[String] = None, _id: Option[String] = None,  _rev: Option[String] = None) extends DocumentOption
   case class Execution(appId: String, appName: String, sparkVer: String, timestamp: Long, _key: Option[String] = None, _id: Option[String] = None, _rev: Option[String] = None) extends DocumentOption
-  case class Operation(name: String, expression: String, outputSchema: Seq[String], _key: Option[String] = None,  _id: Option[String] = None, _rev: Option[String] = None) extends DocumentOption
+
+  case class Schema(attributes: Seq[Attribute])//, dataTypes: Seq[DataType])
+  case class Operation(name: String, expression: String, outputSchema: Schema, _key: Option[String] = None,  _id: Option[String] = None, _rev: Option[String] = None) extends DocumentOption
+
+//  implicit val encoder = io.circe.generic.encoding.DerivedObjectEncoder.deriveEncoder[Operation]
+
   case class DataSource(`type`: String, path: String, _key: Option[String] = None, _rev: Option[String] = None, _id: Option[String] = None) extends DocumentOption
+  case class Attribute(name: String, dataTypeId: String)
 
   case class ProgressOf(_from: String, _to: String,_key: Option[String] = None,  _id: Option[String] = None, _rev: Option[String] = None) extends Edge with DocumentOption
   case class Follows(_from: String, _to: String,_key: Option[String] = None,  _id: Option[String] = None, _rev: Option[String] = None) extends Edge with DocumentOption
   case class ReadsFrom( _from: String, _to: String, _key: Option[String] = None,  _id: Option[String] = None, _rev: Option[String] = None) extends Edge with DocumentOption
   case class WritesTo(_from: String, _to: String,  _key: Option[String] = None, _id: Option[String] = None,  _rev: Option[String] = None) extends Edge with DocumentOption
   case class Implements(_from: String, _to: String, _key: Option[String] = None,  _id: Option[String] = None,  _rev: Option[String] = None) extends Edge with DocumentOption
+//}
+
+
+object Database extends Graph("lineages") {
+  val progress: VertexCollection[Progress] = vertex[Progress]("progress")
+  val execution: VertexCollection[Execution] = vertex[Execution]("execution")
+  val operation: VertexCollection[Operation] = {
+
+    import io.circe.{Decoder, Encoder}
+    import io.circe.generic.semiauto._
+    import com.outr.arango.rest
+
+    new VertexCollection[Operation](this, "operation") {
+      implicit val attrDec: Decoder[Attribute] = io.circe.generic.semiauto.deriveDecoder[Attribute]
+      implicit val schemaDec: Decoder[Schema] = io.circe.generic.semiauto.deriveDecoder[Schema]
+      implicit val attrEnc: Encoder[Attribute] = io.circe.generic.semiauto.deriveEncoder[Attribute]
+      implicit val schemaEnc: Encoder[Schema] = io.circe.generic.semiauto.deriveEncoder[Schema]
+      override implicit val encoder: Encoder[Operation] = deriveEncoder[Operation]
+      override implicit val decoder: Decoder[Operation] = deriveDecoder[Operation]
+      override protected def updateDocument(document: Operation, info: rest.CreateInfo): Operation = {
+        document.copy(_key = Option(info._key), _id = Option(info._id), _rev = Option(info._rev))
+      }
+    }
+  }
+
+  val dataSource: VertexCollection[DataSource] = vertex[DataSource]("dataSource")
+
+  val progressOf: EdgeCollection[ProgressOf] = edge[ProgressOf]("progressOf", ("progress", "execution"))
+  val follows: EdgeCollection[Follows] = edge[Follows]("follows", ("operation", "operation"))
+  val readsFrom: EdgeCollection[ReadsFrom] = edge[ReadsFrom]("readsFrom", ("operation", "dataSource"))
+  val writesTo: EdgeCollection[WritesTo] = edge[WritesTo]("writesTo", ("operation", "dataSource"))
+  val implements: EdgeCollection[Implements] = edge[Implements]("implements", ("execution", "operation"))
 }
 
 class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
-
-  object Database extends Graph("lineages") {
-    val progress: VertexCollection[Progress] = vertex[Progress]("progress")
-    val execution: VertexCollection[Execution] = vertex[Execution]("execution")
-    val operation: VertexCollection[Operation] = vertex[Operation]("operation")
-    val dataSource: VertexCollection[DataSource] = vertex[DataSource]("dataSource")
-
-    val progressOf: EdgeCollection[ProgressOf] = edge[ProgressOf]("progressOf", ("progress", "execution"))
-    val follows: EdgeCollection[Follows] = edge[Follows]("follows", ("operation", "operation"))
-    val readsFrom: EdgeCollection[ReadsFrom] = edge[ReadsFrom]("readsFrom", ("operation", "dataSource"))
-    val writesTo: EdgeCollection[WritesTo] = edge[WritesTo]("writesTo", ("operation", "dataSource"))
-    val implements: EdgeCollection[Implements] = edge[Implements]("implements", ("execution", "operation"))
-  }
 
   describe("scarango") {
     it("funspec") {
@@ -90,11 +117,14 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
   }
 
   // TODO store full attribute information
-  private def findOutputSchema(dataLineage: DataLineage, operation: splinemodel.op.Operation) : Seq[String] = {
+  private def findOutputSchema(dataLineage: DataLineage, operation: splinemodel.op.Operation): Schema = {
     val metaDataset: MetaDataset = dataLineage.datasets.find((dts: MetaDataset) => dts.id == operation.mainProps.output).get
-    metaDataset.schema.attrs.map(attrId => {
-      dataLineage.attributes.find(_.id == attrId).get.name
+    val attributes = metaDataset.schema.attrs.map(attrId => {
+      val attribute = dataLineage.attributes.find(_.id == attrId).get
+//      (attribute.name, dataLineage.dataTypes.find(attribute.dataTypeId == _.id).get.getClass.getSimpleName)
+      Attribute(attribute.name, attribute.dataTypeId.toString)
     })
+    Schema(attributes) //, dataLineage.dataTypes)
   }
 
   private def awaitForever(future: Future[_]) = {
@@ -122,15 +152,15 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
 //    dataSources.foreach(Database.dataSource.insert(_))
 //
     val execution = Execution(dataLineage.appId, dataLineage.appName, dataLineage.sparkVer, dataLineage.timestamp, Some(dataLineage.id.toString))
-    Database.execution.upsert(execution)
-//    // progress for batch need to be generated during migration
+    Await.result(Database.execution.upsert(execution), Duration.Inf)
+//  progress for batch need to be generated during migration
     val progress = dataLineage.operations.find(_.isInstanceOf[BatchWrite]).map(_ => Progress(dataLineage.timestamp, -1, Some(dataLineage.rootDataset.id.toString)))
     progress.foreach(Database.progress.insert(_))
 
     val progressOf = progress.map(p => ProgressOf("progress/" + p._key.get, "execution/" +  execution._key.get, p._key))
     progressOf.foreach(Database.progressOf.insert(_))
-//
-//    // TODO implements
+
+    // TODO implements
     val implements = Implements("execution/" + execution._key.get, "operation/" + dataLineage.rootOperation.mainProps.output.toString, execution._key)
     Await.result(Database.implements.insert(implements), Duration.Inf)
 
@@ -150,12 +180,12 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
       val dataTypes = Seq(Simple("StringType", nullable = true))
 
       val attributes = Seq(
-        Attribute(randomUUID(), "_1", dataTypes.head.id),
-        Attribute(randomUUID(), "_2", dataTypes.head.id),
-        Attribute(randomUUID(), "_3", dataTypes.head.id)
+        splinemodel.Attribute(randomUUID(), "_1", dataTypes.head.id),
+        splinemodel.Attribute(randomUUID(), "_2", dataTypes.head.id),
+        splinemodel.Attribute(randomUUID(), "_3", dataTypes.head.id)
       )
-      val aSchema = Schema(attributes.map(_.id))
-      val bSchema = Schema(attributes.map(_.id).tail)
+      val aSchema = splinemodel.Schema(attributes.map(_.id))
+      val bSchema = splinemodel.Schema(attributes.map(_.id).tail)
 
       val md1 = MetaDataset(datasetId, aSchema)
       val md2 = MetaDataset(randomUUID, aSchema)
