@@ -147,11 +147,9 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
     val progressOf = progress.map(p => ProgressOf("progress/" + p._key.get, "execution/" +  execution._key.get, p._key))
     progressOf.foreach(p => awaitForever(Database.progressOf.insert(p)))
 
-    // TODO implements
     val implements = Implements("execution/" + execution._key.get, "operation/" + dataLineage.rootOperation.mainProps.output.toString, execution._key)
     awaitForever(Database.implements.insert(implements))
 
-    // TODO writesTo, readsFrom:
     // TODO Lineages are connected via meta dataset ids, should we store that somehow in progress events as well?
     null
   }
