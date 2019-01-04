@@ -1,3 +1,5 @@
+package splinescarango
+
 /*
  * Copyright 2017 ABSA Group Limited
  *
@@ -33,49 +35,37 @@
 import java.util.UUID
 import java.util.UUID.randomUUID
 
-import io.circe.{Decoder, Encoder, ObjectEncoder}
-
-import scala.reflect.ClassTag
-
-//import ArangoModel._
-import com.outr.arango._
+import com.outr.arango.{DocumentOption, Edge}
 import com.outr.arango.managed._
 import org.apache.commons.lang.builder.ToStringBuilder.reflectionToString
 import org.scalatest.mockito.MockitoSugar
-import org.scalatest.tools.Durations
 import org.scalatest.{FunSpec, Matchers}
 import za.co.absa.spline.model.{DataLineage, MetaDataset}
 import za.co.absa.spline.{model => splinemodel}
-import za.co.absa.spline.model.dt.{DataType, Simple}
+import za.co.absa.spline.model.dt.Simple
 import za.co.absa.spline.model.op.{BatchWrite, Generic, OperationProps}
 
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration.Duration
 
-//object ArangoModel {
-  case class Progress(timestamp: Long, readCount: Long, _key: Option[String] = None, _id: Option[String] = None,  _rev: Option[String] = None) extends DocumentOption
-  case class Execution(appId: String, appName: String, sparkVer: String, timestamp: Long, dataTypes: Seq[DataType], _key: Option[String] = None, _id: Option[String] = None, _rev: Option[String] = None) extends DocumentOption
+case class Progress(timestamp: Long, readCount: Long, _key: Option[String] = None, _id: Option[String] = None,  _rev: Option[String] = None) extends DocumentOption
+case class Execution(appId: String, appName: String, sparkVer: String, timestamp: Long, dataTypes: Seq[DataType], _key: Option[String] = None, _id: Option[String] = None, _rev: Option[String] = None) extends DocumentOption
+case class DataType(id: String, name: String, nullable: Boolean, childrenIds: Seq[String])
+case class Schema(attributes: Seq[Attribute])//, dataTypes: Seq[DataType])
+case class Operation(name: String, expression: String, outputSchema: Schema, _key: Option[String] = None,  _id: Option[String] = None, _rev: Option[String] = None) extends DocumentOption
+case class DataSource(`type`: String, path: String, _key: Option[String] = None, _rev: Option[String] = None, _id: Option[String] = None) extends DocumentOption
+case class Attribute(name: String, dataTypeId: String)
 
-  case class Schema(attributes: Seq[Attribute])//, dataTypes: Seq[DataType])
-  case class Operation(name: String, expression: String, outputSchema: Schema, _key: Option[String] = None,  _id: Option[String] = None, _rev: Option[String] = None) extends DocumentOption
-
-//  implicit val encoder = io.circe.generic.encoding.DerivedObjectEncoder.deriveEncoder[Operation]
-
-  case class DataSource(`type`: String, path: String, _key: Option[String] = None, _rev: Option[String] = None, _id: Option[String] = None) extends DocumentOption
-  case class Attribute(name: String, dataTypeId: String)
-
-  case class ProgressOf(_from: String, _to: String,_key: Option[String] = None,  _id: Option[String] = None, _rev: Option[String] = None) extends Edge with DocumentOption
-  case class Follows(_from: String, _to: String,_key: Option[String] = None,  _id: Option[String] = None, _rev: Option[String] = None) extends Edge with DocumentOption
-  case class ReadsFrom( _from: String, _to: String, _key: Option[String] = None,  _id: Option[String] = None, _rev: Option[String] = None) extends Edge with DocumentOption
-  case class WritesTo(_from: String, _to: String,  _key: Option[String] = None, _id: Option[String] = None,  _rev: Option[String] = None) extends Edge with DocumentOption
-  case class Implements(_from: String, _to: String, _key: Option[String] = None,  _id: Option[String] = None,  _rev: Option[String] = None) extends Edge with DocumentOption
-//}
-
+case class ProgressOf(_from: String, _to: String,_key: Option[String] = None,  _id: Option[String] = None, _rev: Option[String] = None) extends Edge with DocumentOption
+case class Follows(_from: String, _to: String,_key: Option[String] = None,  _id: Option[String] = None, _rev: Option[String] = None) extends Edge with DocumentOption
+case class ReadsFrom( _from: String, _to: String, _key: Option[String] = None,  _id: Option[String] = None, _rev: Option[String] = None) extends Edge with DocumentOption
+case class WritesTo(_from: String, _to: String,  _key: Option[String] = None, _id: Option[String] = None,  _rev: Option[String] = None) extends Edge with DocumentOption
+case class Implements(_from: String, _to: String, _key: Option[String] = None,  _id: Option[String] = None,  _rev: Option[String] = None) extends Edge with DocumentOption
 
 object Database extends Graph("lineages") {
   val progress: VertexCollection[Progress] = vertex[Progress]("progress")
-  val execution: VertexCollection[Execution] = createVertextCollection[Execution]
-  val operation: VertexCollection[Operation] = createOperationVertexCollection()
+  val execution: VertexCollection[Execution] = vertex[Execution]("execution")
+  val operation: VertexCollection[Operation] = vertex[Operation]("operation")
   val dataSource: VertexCollection[DataSource] = vertex[DataSource]("dataSource")
 
   val progressOf: EdgeCollection[ProgressOf] = edge[ProgressOf]("progressOf", ("progress", "execution"))
@@ -84,45 +74,10 @@ object Database extends Graph("lineages") {
   val writesTo: EdgeCollection[WritesTo] = edge[WritesTo]("writesTo", ("operation", "dataSource"))
   val implements: EdgeCollection[Implements] = edge[Implements]("implements", ("execution", "operation"))
 
-  import io.circe.{Decoder, Encoder}
-  import io.circe.generic.semiauto._
-  import com.outr.arango.rest
-  implicit val dataTypeDec: Decoder[DataType] = deriveDecoder[DataType]
-  implicit val dataTypeEnc: Encoder[DataType] = deriveEncoder[DataType]
-
-  private def createVertextCollection[T <: DocumentOption with CopyMethod[T]](implicit typeTag: ClassTag[T]) = {
-    val name = typeTag.runtimeClass.getSimpleName
-    import Database._
-    new VertexCollection[T](this, name) {
-      override implicit val encoder: Encoder[T] = deriveEncoder[T]
-      override implicit val decoder: Decoder[T] = deriveDecoder[T]
-      override protected def updateDocument(document: T, info: rest.CreateInfo): T = {
-        document.copy(_key = Option(info._key), _id = Option(info._id), _rev = Option(info._rev))
-      }
-    }
-  }
-
   trait CopyMethod[T <: DocumentOption] extends DocumentOption {
     def copy(_key: Option[String], _id: Option[String], _rev: Option[String]): T
   }
 
-
-  private def createOperationVertexCollection() = {
-    import io.circe.{Decoder, Encoder}
-    import io.circe.generic.semiauto._
-    import com.outr.arango.rest
-    new VertexCollection[Operation](this, "operation") {
-      implicit val attrDec: Decoder[Attribute] = deriveDecoder[Attribute]
-      implicit val schemaDec: Decoder[Schema] = deriveDecoder[Schema]
-      implicit val attrEnc: Encoder[Attribute] = deriveEncoder[Attribute]
-      implicit val schemaEnc: Encoder[Schema] = deriveEncoder[Schema]
-      override implicit val encoder: Encoder[Operation] = deriveEncoder[Operation]
-      override implicit val decoder: Decoder[Operation] = deriveDecoder[Operation]
-      override protected def updateDocument(document: Operation, info: rest.CreateInfo): Operation = {
-        document.copy(_key = Option(info._key), _id = Option(info._id), _rev = Option(info._rev))
-      }
-    }
-  }
 }
 
 class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
@@ -130,11 +85,6 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
   describe("scarango") {
     it("funspec") {
       val result = Await.result(Database.init(), Duration.Inf)
-//      println("Init result: " + result)
-//      val execution: Execution = Await.result(Database.execution.insert(Execution("appId1", "appName1", "2.2", System.currentTimeMillis)), Duration.Inf)
-//      val progress: Progress = Await.result(Database.progress.insert(Progress(System.currentTimeMillis, 10)), Duration.Inf)
-//      val progressOf = Await.result(Database.progressOf.insert(ProgressOf(progress._id.get, execution._id.get)), Duration.Inf)
-//      val query = aql"FOR f IN progress RETURN f"
       save(datalineage())
     }
 
@@ -175,14 +125,15 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
 //    })
 //    dataSources.foreach(Database.dataSource.insert(_))
 //
-    val execution = Execution(dataLineage.appId, dataLineage.appName, dataLineage.sparkVer, dataLineage.timestamp, Some(dataLineage.id.toString))
+    val dataTypes = dataLineage.dataTypes.map(d => DataType(d.id.toString, d.getClass.getSimpleName, d.nullable, d.childDataTypeIds.map(_.toString)))
+    val execution = Execution(dataLineage.appId, dataLineage.appName, dataLineage.sparkVer, dataLineage.timestamp, dataTypes, Some(dataLineage.id.toString))
     Await.result(Database.execution.upsert(execution), Duration.Inf)
 //  progress for batch need to be generated during migration
     val progress = dataLineage.operations.find(_.isInstanceOf[BatchWrite]).map(_ => Progress(dataLineage.timestamp, -1, Some(dataLineage.rootDataset.id.toString)))
-    progress.foreach(Database.progress.insert(_))
+    progress.foreach(Database.progress.insert)
 
     val progressOf = progress.map(p => ProgressOf("progress/" + p._key.get, "execution/" +  execution._key.get, p._key))
-    progressOf.foreach(Database.progressOf.insert(_))
+    progressOf.foreach(Database.progressOf.insert)
 
     // TODO implements
     val implements = Implements("execution/" + execution._key.get, "operation/" + dataLineage.rootOperation.mainProps.output.toString, execution._key)
