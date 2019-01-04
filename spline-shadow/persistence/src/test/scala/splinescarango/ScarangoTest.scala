@@ -84,6 +84,7 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
 
   describe("scarango") {
     it("funspec") {
+      awaitForever(Database.delete(true))
       val result = awaitForever(Database.init(force = true))
       save(datalineage())
     }
@@ -120,19 +121,20 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
     })
 
     val dataSources = dataLineage.operations.flatMap(op => op match {
-      case r: Read => r.sources.map(s => DataSource(r.sourceType, s.path, Some(r.mainProps.id.toString)))
-      case w: Write => Some(DataSource(w.destinationType, w.path, Some(w.mainProps.id.toString)))
+      case r: Read => r.sources.map(s => DataSource(r.sourceType, s.path, Some(r.mainProps.output.toString)))
+      case w: Write => Some(DataSource(w.destinationType, w.path, Some(w.mainProps.output.toString)))
       case _ => None
     })
     dataSources.foreach(d => awaitForever(Database.dataSource.upsert(d)))
 
-    val writesTos: Seq[WritesTo] = dataLineage.operations.filter(_.isInstanceOf[Write]).map(o => WritesTo("operation/" + o.mainProps.id.toString, "dataSource/" + o.mainProps.id.toString, Some(o.mainProps.id.toString)))
+    val writesTos: Seq[WritesTo] = dataLineage.operations.filter(_.isInstanceOf[Write])
+      .map(o => WritesTo("operation/" + o.mainProps.output.toString, "dataSource/" + o.mainProps.output.toString, Some(o.mainProps.output.toString)))
     writesTos.foreach(w => awaitForever(Database.writesTo.upsert(w)))
 
     val readsFroms = dataLineage.operations
       .filter(_.isInstanceOf[Read])
       .map(_.asInstanceOf[Read])
-      .flatMap(op => op.sources.map(s => ReadsFrom("operation/" + op.mainProps.id.toString, "dataSource/" + op.mainProps.id.toString, Some(op.mainProps.id.toString))))
+      .flatMap(op => op.sources.map(s => ReadsFrom("operation/" + op.mainProps.output.toString, "dataSource/" + op.mainProps.output.toString, Some(op.mainProps.output.toString))))
     readsFroms.foreach(r => awaitForever(Database.readsFrom.upsert(r)))
 
     val dataTypes = dataLineage.dataTypes.map(d => DataType(d.id.toString, d.getClass.getSimpleName, d.nullable, d.childDataTypeIds.map(_.toString)))
