@@ -44,7 +44,6 @@ import org.scalatest.{FunSpec, Matchers}
 import za.co.absa.spline.model.{DataLineage, MetaDataSource, MetaDataset}
 import za.co.absa.spline.{model => splinemodel}
 import za.co.absa.spline.model.dt.Simple
-import za.co.absa.spline.model.op._
 import za.co.absa.spline.model.op.{Generic, Read, Write, BatchWrite, BatchRead, OperationProps}
 
 import scala.concurrent.{Await, Future}
@@ -205,7 +204,7 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
         timestamp,
         "2.3.0",
         Seq(
-          BatchWrite(OperationProps(randomUUID, "Write", Seq(md3.id), mdOutput.id), "parquet", path, append),
+          BatchWrite(OperationProps(randomUUID, "Write", Seq(md3.id), mdOutput.id), "parquet", path, append, null, null),
           Generic(OperationProps(randomUUID, "Filter", Seq(md4.id), md2.id), "rawString2"),
           BatchRead(OperationProps(randomUUID, "BatchRead", Seq(mdInput.id), md4.id), "csv", Seq(MetaDataSource("hdfs://catSizes/brownCats", Seq(randomUUID)))),
           Generic(OperationProps(randomUUID, "Filter", Seq(md4.id), md1.id), "rawString4"),
