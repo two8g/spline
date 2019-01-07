@@ -32,6 +32,7 @@ package splinescarango
  */
 
 
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.UUID.randomUUID
 
@@ -40,10 +41,11 @@ import com.outr.arango.managed._
 import org.apache.commons.lang.builder.ToStringBuilder.reflectionToString
 import org.scalatest.mockito.MockitoSugar
 import org.scalatest.{FunSpec, Matchers}
-import za.co.absa.spline.model.{DataLineage, MetaDataset}
+import za.co.absa.spline.model.{DataLineage, MetaDataSource, MetaDataset}
 import za.co.absa.spline.{model => splinemodel}
 import za.co.absa.spline.model.dt.Simple
-import za.co.absa.spline.model.op.{Generic, Read, Write, BatchWrite, OperationProps}
+import za.co.absa.spline.model.op._
+import za.co.absa.spline.model.op.{Generic, Read, Write, BatchWrite, BatchRead, OperationProps}
 
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration.Duration
@@ -52,8 +54,9 @@ case class Progress(timestamp: Long, readCount: Long, _key: Option[String] = Non
 case class Execution(appId: String, appName: String, sparkVer: String, timestamp: Long, dataTypes: Seq[DataType], _key: Option[String] = None, _id: Option[String] = None, _rev: Option[String] = None) extends DocumentOption
 case class DataType(id: String, name: String, nullable: Boolean, childrenIds: Seq[String])
 case class Schema(attributes: Seq[Attribute])//, dataTypes: Seq[DataType])
+// Missing dataType or format from write or read operation e.g. csv or parquet
 case class Operation(name: String, expression: String, outputSchema: Schema, _key: Option[String] = None,  _id: Option[String] = None, _rev: Option[String] = None) extends DocumentOption
-case class DataSource(`type`: String, path: String, _key: Option[String] = None, _rev: Option[String] = None, _id: Option[String] = None) extends DocumentOption
+case class DataSource(uri: String, _key: Option[String] = None, _rev: Option[String] = None, _id: Option[String] = None) extends DocumentOption
 case class Attribute(name: String, dataTypeId: String)
 
 case class ProgressOf(_from: String, _to: String,_key: Option[String] = None,  _id: Option[String] = None, _rev: Option[String] = None) extends Edge with DocumentOption
@@ -82,6 +85,12 @@ object Database extends Graph("lineages") {
 
 class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
 
+  private def getHash(s: String) = {
+    MessageDigest.getInstance("SHA-256")
+      .digest(s.getBytes("UTF-8"))
+      .map("%02x".format(_)).mkString
+  }
+
   describe("scarango") {
     it("funspec") {
       awaitForever(Database.delete(true))
@@ -96,7 +105,6 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
     val metaDataset: MetaDataset = dataLineage.datasets.find((dts: MetaDataset) => dts.id == operation.mainProps.output).get
     val attributes = metaDataset.schema.attrs.map(attrId => {
       val attribute = dataLineage.attributes.find(_.id == attrId).get
-//      (attribute.name, dataLineage.dataTypes.find(attribute.dataTypeId == _.id).get.getClass.getSimpleName)
       Attribute(attribute.name, attribute.dataTypeId.toString)
     })
     Schema(attributes) //, dataLineage.dataTypes)
@@ -110,31 +118,43 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
 
     val operations: Seq[Operation] = dataLineage.operations.map(op => {
       val outputSchema = findOutputSchema(dataLineage, op)
-      Operation(op.mainProps.name, reflectionToString(op), outputSchema, Some(op.mainProps.output.toString))
+      Operation(op.mainProps.name, reflectionToString(op), outputSchema, Some(op.mainProps.id.toString))
     })
     operations.foreach(op => awaitForever(Database.operation.upsert(op)))
 
+
+    val outputToOperationId = dataLineage
+      .operations
+      .map(o => (o.mainProps.output, o.mainProps.id))
+      .toMap
+
+    /*
+      Operation inputs and outputs ids may be shared across already linked lineages. To avoid saving linked lineages or
+      duplicate indexes we need to not use these.
+     */
     dataLineage.operations.foreach(op => {
       op.mainProps.inputs
-        .map(mdid => Follows("operation/" + op.mainProps.output.toString, "operation/" + mdid.toString))
+        .flatMap(outputToOperationId.get)
+        .map(opId => Follows("operation/" + op.mainProps.id.toString, "operation/" + opId.toString))
         .foreach(f => awaitForever(Database.follows.insert(f)))
     })
 
     val dataSources = dataLineage.operations.flatMap(op => op match {
-      case r: Read => r.sources.map(s => DataSource(r.sourceType, s.path, Some(r.mainProps.output.toString)))
-      case w: Write => Some(DataSource(w.destinationType, w.path, Some(w.mainProps.output.toString)))
-      case _ => None
-    })
+      case r: Read => r.sources.map(s => s.path)
+      case w: Write => Some(w.path)
+      case _ => None})
+      .distinct
+      .map(path => DataSource(path, Some(getHash(path))))
     dataSources.foreach(d => awaitForever(Database.dataSource.upsert(d)))
 
-    val writesTos: Seq[WritesTo] = dataLineage.operations.filter(_.isInstanceOf[Write])
-      .map(o => WritesTo("operation/" + o.mainProps.output.toString, "dataSource/" + o.mainProps.output.toString, Some(o.mainProps.output.toString)))
+    val writesTos: Seq[WritesTo] = dataLineage.operations.filter(_.isInstanceOf[Write]).map(_.asInstanceOf[Write])
+      .map(o => WritesTo("operation/" + o.mainProps.id.toString, "dataSource/" + getHash(o.path), Some(o.mainProps.id.toString)))
     writesTos.foreach(w => awaitForever(Database.writesTo.upsert(w)))
 
     val readsFroms = dataLineage.operations
       .filter(_.isInstanceOf[Read])
       .map(_.asInstanceOf[Read])
-      .flatMap(op => op.sources.map(s => ReadsFrom("operation/" + op.mainProps.output.toString, "dataSource/" + op.mainProps.output.toString, Some(op.mainProps.output.toString))))
+      .flatMap(op => op.sources.map(s => ReadsFrom("operation/" + op.mainProps.id.toString, "dataSource/" + getHash(s.path), Some(op.mainProps.id.toString))))
     readsFroms.foreach(r => awaitForever(Database.readsFrom.upsert(r)))
 
     val dataTypes = dataLineage.dataTypes.map(d => DataType(d.id.toString, d.getClass.getSimpleName, d.nullable, d.childDataTypeIds.map(_.toString)))
@@ -147,7 +167,7 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
     val progressOf = progress.map(p => ProgressOf("progress/" + p._key.get, "execution/" +  execution._key.get, p._key))
     progressOf.foreach(p => awaitForever(Database.progressOf.insert(p)))
 
-    val implements = Implements("execution/" + execution._key.get, "operation/" + dataLineage.rootOperation.mainProps.output.toString, execution._key)
+    val implements = Implements("execution/" + execution._key.get, "operation/" + dataLineage.rootOperation.mainProps.id.toString, execution._key)
     awaitForever(Database.implements.insert(implements))
 
     // TODO Lineages are connected via meta dataset ids, should we store that somehow in progress events as well?
@@ -177,6 +197,7 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
       val md3 = MetaDataset(randomUUID, bSchema)
       val md4 = MetaDataset(randomUUID, bSchema)
       val mdOutput = MetaDataset(randomUUID, bSchema)
+      val mdInput = MetaDataset(randomUUID, bSchema)
 
       DataLineage(
         appId,
@@ -186,7 +207,7 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
         Seq(
           BatchWrite(OperationProps(randomUUID, "Write", Seq(md3.id), mdOutput.id), "parquet", path, append),
           Generic(OperationProps(randomUUID, "Filter", Seq(md4.id), md2.id), "rawString2"),
-          Generic(OperationProps(randomUUID, "LogicalRDD", Seq.empty, md4.id), "rawString3"),
+          BatchRead(OperationProps(randomUUID, "BatchRead", Seq(mdInput.id), md4.id), "csv", Seq(MetaDataSource("hdfs://catSizes/brownCats", Seq(randomUUID)))),
           Generic(OperationProps(randomUUID, "Filter", Seq(md4.id), md1.id), "rawString4"),
           Generic(OperationProps(randomUUID, "Union", Seq(md1.id, md2.id), md3.id), "rawString1")
         ),
