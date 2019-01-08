@@ -36,8 +36,10 @@ import java.security.MessageDigest
 import java.util.UUID
 import java.util.UUID.randomUUID
 
-import com.outr.arango.{DocumentOption, Edge}
 import com.outr.arango.managed._
+
+import com.outr.arango.{DocumentOption, Edge, _}
+
 import org.apache.commons.lang.builder.ToStringBuilder.reflectionToString
 import org.scalatest.mockito.MockitoSugar
 import org.scalatest.{FunSpec, Matchers}
@@ -58,14 +60,11 @@ trait Operation extends PolymorphicDocumentOption {
   def name: String
   def expression: String
   def outputSchema: Schema
-  def _key: Option[String]
-  def  _id: Option[String]
-  def _rev: Option[String]
 }
 
-case class Read(name: String, expression: String, sourceType: String, outputSchema: Schema, override val _key: Option[String] = None,  override val _id: Option[String] = None, override val _rev: Option[String] = None, _type: String = "Read") extends Operation
-case class Write(name: String, expression: String, destinationType: String, outputSchema: Schema, override val _key: Option[String] = None,  override val _id: Option[String] = None, override val _rev: Option[String] = None, _type: String = "Write") extends Operation
-case class Process(name: String, expression: String, outputSchema: Schema, override val _key: Option[String] = None,  override val _id: Option[String] = None, override val _rev: Option[String] = None, _type: String = "Process") extends Operation
+case class Read(name: String, expression: String, sourceType: String, outputSchema: Schema, _key: Option[String] = None,   _id: Option[String] = None,  _rev: Option[String] = None, _type: String = "Read") extends Operation
+case class Write(name: String, expression: String, destinationType: String, outputSchema: Schema,  _key: Option[String] = None,   _id: Option[String] = None,  _rev: Option[String] = None, _type: String = "Write") extends Operation
+case class Process(name: String, expression: String, outputSchema: Schema,  _key: Option[String] = None,   _id: Option[String] = None,  _rev: Option[String] = None, _type: String = "Process") extends Operation
 
 case class DataSource(uri: String, _key: Option[String] = None, _rev: Option[String] = None, _id: Option[String] = None) extends DocumentOption
 case class Attribute(name: String, dataTypeId: String)
@@ -77,8 +76,10 @@ case class WritesTo(_from: String, _to: String,  _key: Option[String] = None, _i
 case class Implements(_from: String, _to: String, _key: Option[String] = None,  _id: Option[String] = None,  _rev: Option[String] = None) extends Edge with DocumentOption
 
 object Database extends Graph("lineages") {
+
   val progress: VertexCollection[Progress] = vertex[Progress]("progress")
   val execution: VertexCollection[Execution] = vertex[Execution]("execution")
+
   val operation: PolymorphicVertexCollection[Operation] = polymorphic3[Operation, Read, Write, Process]("operation")
   val dataSource: VertexCollection[DataSource] = vertex[DataSource]("dataSource")
 
