@@ -52,8 +52,7 @@ import scala.concurrent.duration.Duration
 case class Progress(timestamp: Long, readCount: Long, _key: Option[String] = None, _id: Option[String] = None,  _rev: Option[String] = None) extends DocumentOption
 case class Execution(appId: String, appName: String, sparkVer: String, timestamp: Long, dataTypes: Seq[DataType], _key: Option[String] = None, _id: Option[String] = None, _rev: Option[String] = None) extends DocumentOption
 case class DataType(id: String, name: String, nullable: Boolean, childrenIds: Seq[String])
-case class Schema(attributes: Seq[Attribute])//, dataTypes: Seq[DataType])
-// Missing dataType or format from write or read operation e.g. csv or parquet
+case class Schema(attributes: Seq[Attribute])
 case class Operation(name: String, expression: String, outputSchema: Schema, format: Option[String], _key: Option[String] = None,  _id: Option[String] = None, _rev: Option[String] = None) extends DocumentOption
 case class DataSource(uri: String, _key: Option[String] = None, _rev: Option[String] = None, _id: Option[String] = None) extends DocumentOption
 case class Attribute(name: String, dataTypeId: String)
@@ -100,14 +99,13 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
 
   }
 
-  // TODO store full attribute information
   private def findOutputSchema(dataLineage: DataLineage, operation: splinemodel.op.Operation): Schema = {
     val metaDataset: MetaDataset = dataLineage.datasets.find((dts: MetaDataset) => dts.id == operation.mainProps.output).get
     val attributes = metaDataset.schema.attrs.map(attrId => {
       val attribute = dataLineage.attributes.find(_.id == attrId).get
       Attribute(attribute.name, attribute.dataTypeId.toString)
     })
-    Schema(attributes) //, dataLineage.dataTypes)
+    Schema(attributes)
   }
 
   private def awaitForever(future: Future[_]) = {
@@ -167,7 +165,7 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
     val execution = Execution(dataLineage.appId, dataLineage.appName, dataLineage.sparkVer, dataLineage.timestamp, dataTypes, Some(dataLineage.id.toString))
     awaitForever(Database.execution.upsert(execution))
 
-//  progress for batch need to be generated during migration
+    //  progress for batch need to be generated during migration
     val progress = dataLineage.operations.find(_.isInstanceOf[BatchWrite]).map(_ => Progress(dataLineage.timestamp, -1, Some(dataLineage.id.toString)))
     progress.foreach(p => awaitForever(Database.progress.insert(p)))
 
