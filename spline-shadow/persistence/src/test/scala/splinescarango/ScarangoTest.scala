@@ -44,7 +44,7 @@ import org.scalatest.{FunSpec, Matchers}
 import za.co.absa.spline.model.{DataLineage, MetaDataSource, MetaDataset}
 import za.co.absa.spline.{model => splinemodel}
 import za.co.absa.spline.model.dt.Simple
-import za.co.absa.spline.model.op.{Generic, Read, Write, BatchWrite, BatchRead, OperationProps}
+import za.co.absa.spline.model.op.{Generic, BatchWrite, BatchRead, OperationProps}
 
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration.Duration
@@ -53,7 +53,20 @@ case class Progress(timestamp: Long, readCount: Long, _key: Option[String] = Non
 case class Execution(appId: String, appName: String, sparkVer: String, timestamp: Long, dataTypes: Seq[DataType], _key: Option[String] = None, _id: Option[String] = None, _rev: Option[String] = None) extends DocumentOption
 case class DataType(id: String, name: String, nullable: Boolean, childrenIds: Seq[String])
 case class Schema(attributes: Seq[Attribute])
-case class Operation(name: String, expression: String, outputSchema: Schema, format: Option[String], _key: Option[String] = None,  _id: Option[String] = None, _rev: Option[String] = None) extends DocumentOption
+
+trait Operation extends PolymorphicDocumentOption {
+  def name: String
+  def expression: String
+  def outputSchema: Schema
+  def _key: Option[String]
+  def  _id: Option[String]
+  def _rev: Option[String]
+}
+
+case class Read(name: String, expression: String, sourceType: String, outputSchema: Schema, override val _key: Option[String] = None,  override val _id: Option[String] = None, override val _rev: Option[String] = None, _type: String = "Read") extends Operation
+case class Write(name: String, expression: String, destinationType: String, outputSchema: Schema, override val _key: Option[String] = None,  override val _id: Option[String] = None, override val _rev: Option[String] = None, _type: String = "Write") extends Operation
+case class Process(name: String, expression: String, outputSchema: Schema, override val _key: Option[String] = None,  override val _id: Option[String] = None, override val _rev: Option[String] = None, _type: String = "Process") extends Operation
+
 case class DataSource(uri: String, _key: Option[String] = None, _rev: Option[String] = None, _id: Option[String] = None) extends DocumentOption
 case class Attribute(name: String, dataTypeId: String)
 
@@ -66,7 +79,7 @@ case class Implements(_from: String, _to: String, _key: Option[String] = None,  
 object Database extends Graph("lineages") {
   val progress: VertexCollection[Progress] = vertex[Progress]("progress")
   val execution: VertexCollection[Execution] = vertex[Execution]("execution")
-  val operation: VertexCollection[Operation] = vertex[Operation]("operation")
+  val operation: PolymorphicVertexCollection[Operation] = polymorphic3[Operation, Read, Write, Process]("operation")
   val dataSource: VertexCollection[DataSource] = vertex[DataSource]("dataSource")
 
   val progressOf: EdgeCollection[ProgressOf] = edge[ProgressOf]("progressOf", ("progress", "execution"))
@@ -120,9 +133,9 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
       val expression = reflectionToString(op)
       val name = op.mainProps.name
       op match {
-        case r: Read => Operation(name, expression, outputSchema, Some(r.sourceType), _key)
-        case w: Write => Operation(name, expression, outputSchema, Some(w.destinationType), _key)
-        case _ => Operation(name, expression, outputSchema, None, _key)
+        case r: splinemodel.op.Read => Read(name, expression, r.sourceType, outputSchema, _key)
+        case w: splinemodel.op.Write => Write(name, expression, w.destinationType, outputSchema, _key)
+        case _ => Process(name, expression, outputSchema, None, _key)
     }})
     operations.foreach(op => awaitForever(Database.operation.upsert(op)))
 
@@ -144,20 +157,20 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
     })
 
     val dataSources = dataLineage.operations.flatMap(op => op match {
-      case r: Read => r.sources.map(s => s.path)
-      case w: Write => Some(w.path)
+      case r: splinemodel.op.Read => r.sources.map(s => s.path)
+      case w: splinemodel.op.Write => Some(w.path)
       case _ => None})
       .distinct
       .map(path => DataSource(path, Some(getHash(path))))
     dataSources.foreach(d => awaitForever(Database.dataSource.upsert(d)))
 
-    val writesTos: Seq[WritesTo] = dataLineage.operations.filter(_.isInstanceOf[Write]).map(_.asInstanceOf[Write])
+    val writesTos: Seq[WritesTo] = dataLineage.operations.filter(_.isInstanceOf[splinemodel.op.Write]).map(_.asInstanceOf[splinemodel.op.Write])
       .map(o => WritesTo("operation/" + o.mainProps.id.toString, "dataSource/" + getHash(o.path), Some(o.mainProps.id.toString)))
     writesTos.foreach(w => awaitForever(Database.writesTo.upsert(w)))
 
     val readsFroms = dataLineage.operations
-      .filter(_.isInstanceOf[Read])
-      .map(_.asInstanceOf[Read])
+      .filter(_.isInstanceOf[splinemodel.op.Read])
+      .map(_.asInstanceOf[splinemodel.op.Read])
       .flatMap(op => op.sources.map(s => ReadsFrom("operation/" + op.mainProps.id.toString, "dataSource/" + getHash(s.path), Some(op.mainProps.id.toString))))
     readsFroms.foreach(r => awaitForever(Database.readsFrom.upsert(r)))
 
