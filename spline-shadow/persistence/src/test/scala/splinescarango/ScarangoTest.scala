@@ -54,7 +54,7 @@ case class Execution(appId: String, appName: String, sparkVer: String, timestamp
 case class DataType(id: String, name: String, nullable: Boolean, childrenIds: Seq[String])
 case class Schema(attributes: Seq[Attribute])//, dataTypes: Seq[DataType])
 // Missing dataType or format from write or read operation e.g. csv or parquet
-case class Operation(name: String, expression: String, outputSchema: Schema, _key: Option[String] = None,  _id: Option[String] = None, _rev: Option[String] = None) extends DocumentOption
+case class Operation(name: String, expression: String, outputSchema: Schema, format: Option[String], _key: Option[String] = None,  _id: Option[String] = None, _rev: Option[String] = None) extends DocumentOption
 case class DataSource(uri: String, _key: Option[String] = None, _rev: Option[String] = None, _id: Option[String] = None) extends DocumentOption
 case class Attribute(name: String, dataTypeId: String)
 
@@ -84,6 +84,7 @@ object Database extends Graph("lineages") {
 
 class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
 
+  // TODO replace with upsert
   private def getHash(s: String) = {
     MessageDigest.getInstance("SHA-256")
       .digest(s.getBytes("UTF-8"))
@@ -117,8 +118,14 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
 
     val operations: Seq[Operation] = dataLineage.operations.map(op => {
       val outputSchema = findOutputSchema(dataLineage, op)
-      Operation(op.mainProps.name, reflectionToString(op), outputSchema, Some(op.mainProps.id.toString))
-    })
+      val _key = Some(op.mainProps.id.toString)
+      val expression = reflectionToString(op)
+      val name = op.mainProps.name
+      op match {
+        case r: Read => Operation(name, expression, outputSchema, Some(r.sourceType), _key)
+        case w: Write => Operation(name, expression, outputSchema, Some(w.destinationType), _key)
+        case _ => Operation(name, expression, outputSchema, None, _key)
+    }})
     operations.foreach(op => awaitForever(Database.operation.upsert(op)))
 
 
@@ -159,6 +166,7 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
     val dataTypes = dataLineage.dataTypes.map(d => DataType(d.id.toString, d.getClass.getSimpleName, d.nullable, d.childDataTypeIds.map(_.toString)))
     val execution = Execution(dataLineage.appId, dataLineage.appName, dataLineage.sparkVer, dataLineage.timestamp, dataTypes, Some(dataLineage.id.toString))
     awaitForever(Database.execution.upsert(execution))
+
 //  progress for batch need to be generated during migration
     val progress = dataLineage.operations.find(_.isInstanceOf[BatchWrite]).map(_ => Progress(dataLineage.timestamp, -1, Some(dataLineage.id.toString)))
     progress.foreach(p => awaitForever(Database.progress.insert(p)))
@@ -169,7 +177,6 @@ class ScarangoTest extends FunSpec with Matchers with MockitoSugar {
     val implements = Implements("execution/" + execution._key.get, "operation/" + dataLineage.rootOperation.mainProps.id.toString, execution._key)
     awaitForever(Database.implements.insert(implements))
 
-    // TODO Lineages are connected via meta dataset ids, should we store that somehow in progress events as well?
     null
   }
 
